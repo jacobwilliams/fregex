@@ -156,13 +156,13 @@ recursive subroutine emit_repeat(ast, prog, body, qmin, qmax, greedy, errmsg)
         allocate (splits(1), checks(0))
         loop = prog%emit(OP_SPLIT)
         splits(1) = loop
-        call emit_iteration()
+        call emit_iteration(ast, prog, body, reg, checks, errmsg)
         pc = prog%emit(OP_JMP, loop)
     else
         allocate (splits(qmax - qmin), checks(0))
         do k = 1, qmax - qmin
             splits(k) = prog%emit(OP_SPLIT)
-            call emit_iteration()
+            call emit_iteration(ast, prog, body, reg, checks, errmsg)
             if (allocated(errmsg)) return
         end do
     end if
@@ -178,19 +178,34 @@ recursive subroutine emit_repeat(ast, prog, body, qmin, qmax, greedy, errmsg)
     do k = 1, size(checks)
         prog%code(2, checks(k)) = exit_pc
     end do
-
-contains
-
-    recursive subroutine emit_iteration()
-        if (nullable) pc = prog%emit(OP_MARK, reg)
-        call emit_node(ast, prog, body, errmsg)
-        if (nullable) then
-            pc = prog%emit(OP_CHECK_EXIT, reg)
-            checks = [checks, pc]
-        end if
-    end subroutine emit_iteration
-
 end subroutine emit_repeat
+
+recursive subroutine emit_iteration(ast, prog, body, reg, checks, errmsg)
+    !! One optional iteration of a repeat. If `reg` is nonzero (the body can match the empty
+    !! string), the iteration ends with an OP_CHECK_EXIT, whose pc is added to `checks` so that
+    !! emit_repeat can point it at the end of the repeat.
+    !!
+    !!@note This is a module procedure rather than an internal procedure of the recursive [[emit_repeat]],
+    !! because some compilers (LFortran 0.67) give an internal procedure the variables of the
+    !! most recent call of its host instead of the call it was invoked from.
+    type(ast_t), intent(in) :: ast
+    type(program_t), intent(inout) :: prog
+    integer, intent(in) :: body, reg
+    integer, allocatable, intent(inout) :: checks(:)
+    character(len=:), allocatable, intent(inout) :: errmsg
+    integer :: pc
+
+    if (reg /= 0) pc = prog%emit(OP_MARK, reg)
+    call emit_node(ast, prog, body, errmsg)
+    if (reg /= 0) then
+        pc = prog%emit(OP_CHECK_EXIT, reg)
+        if (allocated(checks)) then
+            checks = [checks, pc]
+        else
+            checks = [pc]
+        end if
+    end if
+end subroutine emit_iteration
 
 subroutine emit_single_repeat(ast, prog, body, qmin, qmax, mode)
     !! Emit `body{qmin,qmax}` for a body that matches exactly one byte, as one OP_REPEAT. The VM
