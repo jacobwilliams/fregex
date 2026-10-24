@@ -61,9 +61,10 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found,
 
     found = .false.
     overflow = .false.
-    if (.not. allocated(vm%caps)) then
-        allocate (vm%caps(0:2*prog%ngroups + 1), vm%regs(max(1, prog%nregs)), vm%stack(4, 64))
-    end if
+    ! Most programs use no registers, and `caps` may have been handed to the caller last time.
+    if (.not. allocated(vm%caps)) allocate (vm%caps(0:2*prog%ngroups + 1))
+    if (.not. allocated(vm%stack)) allocate (vm%stack(4, 64))
+    if (prog%nregs > 0 .and. .not. allocated(vm%regs)) allocate (vm%regs(prog%nregs))
     vm%steps = 0
     vm%overflow = .false.
     vm%step_limit = step_limit
@@ -77,7 +78,7 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found,
     ! A failed attempt pops everything it pushed, which restores the captures and registers, so
     ! they only need clearing once.
     vm%caps = 0
-    vm%regs = 0
+    if (allocated(vm%regs)) vm%regs = 0
     vm%top = 0
     st = max(1, start)
     do while (st <= last)
@@ -90,8 +91,10 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found,
             end if
         end if
         if (len(prog%prefix) > 0) then
-            st = find_prefix(s, prog%prefix, st, last)
-            if (st == 0) exit
+            ! the first `prefix_offset` bytes of the prefix come before the match
+            k = find_prefix(s, prog%prefix, max(1, st - prog%prefix_offset), last - prog%prefix_offset)
+            if (k == 0) exit
+            st = k + prog%prefix_offset
         else if (prog%use_first) then
             do while (st <= last)
                 if (prog%first(at(s, st))) exit
@@ -101,7 +104,13 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found,
         end if
         if (run(prog, s, vm, 1, st, sp_end)) then
             found = .true.
-            caps = vm%caps
+            ! Hand over the array if the caller has none yet, which saves an allocation and
+            ! a copy for one-off searches. A reused `vm` then allocates it again next time.
+            if (allocated(caps)) then
+                caps = vm%caps
+            else
+                call move_alloc(vm%caps, caps)
+            end if
             return
         end if
         if (vm%overflow) then

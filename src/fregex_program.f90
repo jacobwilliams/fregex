@@ -51,7 +51,9 @@ type, public :: program_t
     logical :: line_start = .false.             !! can only match at the start of a line (`(?m)^...`)
     logical :: use_first = .false.              !! a match must start with a byte in `first`
     logical :: first(-1:255) = .false.
-    character(len=:), allocatable :: prefix     !! literal text that every match starts with (may be empty)
+    character(len=:), allocatable :: prefix     !! literal text at the start of every match (may be empty)
+    integer :: prefix_offset = 0                !! how many bytes of `prefix` come before the match
+                                                !! (from a leading lookbehind such as `(?<=call )`)
 contains
     procedure :: emit
     procedure :: new_reg

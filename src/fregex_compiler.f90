@@ -40,7 +40,7 @@ subroutine compile_ast(ast, prog, errmsg)
     call first_set(ast, ast%root, first, nullable)
     prog%first = first%table()
     prog%use_first = .not. nullable
-    prog%prefix = literal_prefix(ast, ast%root)
+    call literal_prefix(ast, ast%root, prog%prefix, prog%prefix_offset)
 end subroutine compile_ast
 
 recursive subroutine emit_node(ast, prog, id, errmsg)
@@ -361,28 +361,71 @@ pure integer function mul_width(a, b) result(w)
     end if
 end function mul_width
 
-function literal_prefix(ast, id) result(prefix)
-    !! The case-sensitive literal bytes that every match starts with, e.g. `ab` for `ab\d+`.
-    !! Only a leading run of plain characters is recognized, which covers the common cases.
+subroutine literal_prefix(ast, id, prefix, offset)
+    !! Case-sensitive literal text found at the start of every match, e.g. `ab` for `ab\d+`.
+    !! Only a leading run of plain characters is recognized, which covers the common cases. A
+    !! leading positive lookbehind whose body is plain characters counts too, as text just before
+    !! the match: `(?<=call )\w+` gives `call ` with `offset` 5.
     type(ast_t), intent(in) :: ast
     integer, intent(in) :: id
-    character(len=:), allocatable :: prefix
+    character(len=:), allocatable, intent(out) :: prefix
+    integer, intent(out) :: offset
     integer :: k, kid
+    integer, allocatable :: kids(:)
 
     prefix = ''
+    offset = 0
+    if (ast%nodes(id)%kind == N_CONCAT) then
+        kids = ast%nodes(id)%kids
+    else
+        kids = [id]
+    end if
+    k = 1
+    associate (look => ast%nodes(kids(1)))
+        if (look%kind == N_LOOK .and. look%a == 0 .and. look%b == 0) then   ! (?<=...)
+            if (plain_text(ast, look%kids(1), prefix)) then
+                offset = len(prefix)
+                k = 2
+            end if
+        end if
+    end associate
+    do k = k, size(kids)
+        kid = kids(k)
+        if (ast%nodes(kid)%kind /= N_CHAR .or. ast%nodes(kid)%b /= 0) exit
+        prefix = prefix//achar(ast%nodes(kid)%a)
+    end do
+end subroutine literal_prefix
+
+logical function plain_text(ast, id, text) result(ok)
+    !! True if node `id` is one or more case-sensitive plain characters, returned in `text`.
+    type(ast_t), intent(in) :: ast
+    integer, intent(in) :: id
+    character(len=:), allocatable, intent(inout) :: text
+    integer :: k
+
+    text = ''
+    ok = .false.
     associate (node => ast%nodes(id))
         select case (node%kind)
         case (N_CHAR)
-            if (node%b == 0) prefix = achar(node%a)
+            if (node%b /= 0) return
+            text = achar(node%a)
         case (N_CONCAT)
             do k = 1, size(node%kids)
-                kid = node%kids(k)
-                if (ast%nodes(kid)%kind /= N_CHAR .or. ast%nodes(kid)%b /= 0) exit
-                prefix = prefix//achar(ast%nodes(kid)%a)
+                associate (kid => ast%nodes(node%kids(k)))
+                    if (kid%kind /= N_CHAR .or. kid%b /= 0) then
+                        text = ''
+                        return
+                    end if
+                    text = text//achar(kid%a)
+                end associate
             end do
+        case default
+            return
         end select
     end associate
-end function literal_prefix
+    ok = .true.
+end function plain_text
 
 recursive logical function is_anchored(ast, id, lines) result(anchored)
     !! True if every match must start at the beginning of the string (`\A...` or `^...` without
