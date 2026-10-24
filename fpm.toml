@@ -3,7 +3,7 @@ version = "0.1.0"
 license = "MIT"
 author = "Jacob Williams"
 maintainer = "Jacob Williams"
-description = "Backtracking regular expressions for modern Fortran, with Python re-compatible syntax"
+description = "Regular expressions for modern Fortran, with Python re-compatible syntax"
 keywords = ["regex", "regular expressions", "strings", "text"]
 
 [build]
