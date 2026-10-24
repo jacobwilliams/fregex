@@ -3,7 +3,7 @@ authors = ["Jacob Williams <jacobwilliams@users.noreply.github.com>"]
 channels = ["conda-forge"]
 name = "ffmt"
 platforms = ["osx-arm64", "linux-64", "linux-aarch64", "osx-64", "win-64"]
-version = "0.1.0"
+version = "0.3.0"
 
 [tasks]
 format = { cmd = "fpm run ffmt --profile release -- .", description = "Format this repository with ffmt itself" }
