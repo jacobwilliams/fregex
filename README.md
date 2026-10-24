@@ -30,7 +30,7 @@ Add it to an fpm project with:
 
 ```toml
 [dependencies]
-fregex = { path = "fregex" }   # or a git URL once it has its own repository
+fregex = { git = "https://github.com/jacobwilliams/fregex" }
 ```
 
 ## Syntax
