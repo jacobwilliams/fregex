@@ -81,14 +81,16 @@ contains
 end type replacer_t
 
 abstract interface
-    function replace_iface(self, subject, caps, names) result(text)
-        import :: replacer_t, regex_string_t
+    subroutine replace_iface(self, subject, caps, names, out)
+        !! Append the replacement for the match in `caps` to `out`. Appending, rather than
+        !! returning the text, saves allocating a string for every match.
+        import :: replacer_t, regex_string_t, string_builder_t
         class(replacer_t), intent(in) :: self
         character(len=*), intent(in) :: subject
         integer, intent(in) :: caps(0:)
         type(regex_string_t), intent(in) :: names(:)
-        character(len=:), allocatable :: text
-    end function replace_iface
+        type(string_builder_t), intent(inout) :: out
+    end subroutine replace_iface
 end interface
 
 type, extends(replacer_t) :: template_replacer_t
@@ -261,14 +263,14 @@ function regex_split(self, string, maxsplit, stat, errmsg) result(parts)
     type(regex_string_t), allocatable :: parts(:)
 
     type(vm_t) :: vm
-    integer, allocatable :: caps(:)
-    integer :: pos, forbid, last, nsplit, limit, g, ierr, nparts
+    integer, allocatable :: caps(:), spans(:, :)
+    integer :: pos, forbid, last, nsplit, limit, g, ierr, nparts, k
     logical :: found
     character(len=:), allocatable :: msg
 
     limit = 0
     if (present(maxsplit)) limit = maxsplit
-    allocate (parts(4))
+    allocate (spans(2, 16))
     nparts = 0
     last = 1
     nsplit = 0
@@ -279,36 +281,40 @@ function regex_split(self, string, maxsplit, stat, errmsg) result(parts)
         if (limit > 0 .and. nsplit >= limit) exit
         call self%exec(string, pos, MODE_SEARCH, forbid, vm, found, caps, ierr, msg)
         if (ierr /= RE_OK .or. .not. found) exit
-        call push(string(last:caps(0) - 1))
+        call add(last, caps(0) - 1)
         do g = 1, self%prog%ngroups
             if (caps(2*g) > 0 .and. caps(2*g + 1) > 0) then
-                call push(string(caps(2*g):caps(2*g + 1) - 1))
+                call add(caps(2*g), caps(2*g + 1) - 1)
             else
-                call push('')
+                call add(1, 0)
             end if
         end do
         last = caps(1)
         nsplit = nsplit + 1
         call advance(caps, pos, forbid)
     end do
-    call push(string(last:))
-    parts = parts(1:nparts)
+    call add(last, len(string))
+    ! The pieces are built at the end, so that growing the list only copies integers.
+    allocate (parts(nparts))
+    do k = 1, nparts
+        parts(k)%s = string(spans(1, k):spans(2, k))
+    end do
     call finish(ierr, msg, stat, errmsg)
 
 contains
 
-    subroutine push(piece)
-        !! Append a piece, doubling the array when it is full.
-        character(len=*), intent(in) :: piece
-        type(regex_string_t), allocatable :: tmp(:)
-        if (nparts == size(parts)) then
-            allocate (tmp(2*nparts))
-            tmp(1:nparts) = parts(1:nparts)
-            call move_alloc(tmp, parts)
+    subroutine add(i1, i2)
+        !! Record the piece `string(i1:i2)`, doubling the list when it is full.
+        integer, intent(in) :: i1, i2
+        integer, allocatable :: tmp(:, :)
+        if (nparts == size(spans, 2)) then
+            allocate (tmp(2, 2*nparts))
+            tmp(:, 1:nparts) = spans(:, 1:nparts)
+            call move_alloc(tmp, spans)
         end if
         nparts = nparts + 1
-        parts(nparts)%s = piece
-    end subroutine push
+        spans(:, nparts) = [i1, i2]
+    end subroutine add
 
 end function regex_split
 
@@ -389,7 +395,7 @@ function substitute(self, string, replacer, count, nsubs, stat, errmsg) result(o
         call self%exec(string, pos, MODE_SEARCH, forbid, vm, found, caps, ierr, msg)
         if (ierr /= RE_OK .or. .not. found) exit
         call buf%append(string(last:caps(0) - 1))
-        call buf%append(replacer%replace(string, caps, self%prog%names))
+        call replacer%replace(string, caps, self%prog%names, buf)
         last = caps(1)
         n = n + 1
         call advance(caps, pos, forbid)
@@ -401,23 +407,23 @@ function substitute(self, string, replacer, count, nsubs, stat, errmsg) result(o
     call finish(ierr, msg, stat, errmsg)
 end function substitute
 
-function replace_template(self, subject, caps, names) result(text)
+subroutine replace_template(self, subject, caps, names, out)
     class(template_replacer_t), intent(in) :: self
     character(len=*), intent(in) :: subject
     integer, intent(in) :: caps(0:)
     type(regex_string_t), intent(in) :: names(:)
-    character(len=:), allocatable :: text
-    text = expand_template(self%tmpl, subject, caps)
-end function replace_template
+    type(string_builder_t), intent(inout) :: out
+    call expand_template(self%tmpl, subject, caps, out)
+end subroutine replace_template
 
-function replace_callback(self, subject, caps, names) result(text)
+subroutine replace_callback(self, subject, caps, names, out)
     class(callback_replacer_t), intent(in) :: self
     character(len=*), intent(in) :: subject
     integer, intent(in) :: caps(0:)
     type(regex_string_t), intent(in) :: names(:)
-    character(len=:), allocatable :: text
-    text = self%fn(new_match(subject, caps, names))
-end function replace_callback
+    type(string_builder_t), intent(inout) :: out
+    call out%append(self%fn(new_match(subject, caps, names)))
+end subroutine replace_callback
 
 logical function exec_one(self, string, mode, m, pos, stat, errmsg) result(found)
     !! One search, match or fullmatch, with error reporting.

@@ -171,13 +171,13 @@ contains
 
 end subroutine parse_template
 
-pure function expand_template(tmpl, subject, caps) result(text)
-    !! The replacement text for one match. `caps` holds VM capture positions (0 if unset).
+pure subroutine expand_template(tmpl, subject, caps, out)
+    !! Append the replacement text for one match to `out`. `caps` holds VM capture positions
+    !! (0 if unset).
     type(template_t), intent(in) :: tmpl
     character(len=*), intent(in) :: subject
     integer, intent(in) :: caps(0:)
-    character(len=:), allocatable :: text
-    type(string_builder_t) :: out
+    type(string_builder_t), intent(inout) :: out
     integer :: k, g
 
     do k = 1, size(tmpl%group)
@@ -188,7 +188,6 @@ pure function expand_template(tmpl, subject, caps) result(text)
             call out%append(subject(caps(2*g):caps(2*g + 1) - 1))
         end if
     end do
-    text = out%get()
-end function expand_template
+end subroutine expand_template
 
 end module fregex_template

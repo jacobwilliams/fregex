@@ -48,6 +48,7 @@ type, public :: program_t
     integer :: nregs = 0
     type(regex_string_t), allocatable :: names(:)     !! (1:ngroups)
     logical :: anchored = .false.               !! can only match at the start of the string
+    logical :: line_start = .false.             !! can only match at the start of a line (`(?m)^...`)
     logical :: use_first = .false.              !! a match must start with a byte in `first`
     logical :: first(-1:255) = .false.
     character(len=:), allocatable :: prefix     !! literal text that every match starts with (may be empty)

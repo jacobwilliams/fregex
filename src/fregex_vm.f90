@@ -57,7 +57,7 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found,
     integer, allocatable, intent(inout) :: caps(:)
     logical, intent(out) :: overflow
 
-    integer :: st, last, sp_end
+    integer :: st, last, sp_end, k
 
     found = .false.
     overflow = .false.
@@ -82,6 +82,13 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found,
     st = max(1, start)
     do while (st <= last)
         ! skip to the next position where a match can start
+        if (prog%line_start .and. st > 1) then
+            if (at(s, st - 1) /= 10) then
+                k = find_prefix(s, achar(10), st, last - 1)
+                if (k == 0) exit
+                st = k + 1
+            end if
+        end if
         if (len(prog%prefix) > 0) then
             st = find_prefix(s, prog%prefix, st, last)
             if (st == 0) exit
@@ -340,6 +347,15 @@ recursive function run(prog, s, vm, pc0, sp0, sp_out) result(ok)
                 case (BT_GREEDY)   ! give back one byte, keeping the entry while more can be given back
                     pc = vm%stack(2, k) + 1
                     sp = vm%stack(3, k) - 1
+                    if (prog%code(0, pc) == OP_CHAR) then
+                        ! give back straight to where the literal byte that follows can match
+                        c = prog%code(1, pc)
+                        do while (sp >= vm%stack(4, k))
+                            if (at(s, sp) == c) exit
+                            sp = sp - 1
+                        end do
+                        if (sp < vm%stack(4, k)) cycle   ! nowhere: drop the entry
+                    end if
                     if (sp > vm%stack(4, k)) then
                         vm%stack(3, k) = sp
                         vm%top = k

@@ -35,7 +35,8 @@ subroutine compile_ast(ast, prog, errmsg)
     pc = prog%emit(OP_SAVE, 1)
     pc = prog%emit(OP_MATCH)
 
-    prog%anchored = is_anchored(ast, ast%root)
+    prog%anchored = is_anchored(ast, ast%root, .false.)
+    prog%line_start = .not. prog%anchored .and. is_anchored(ast, ast%root, .true.)
     call first_set(ast, ast%root, first, nullable)
     prog%first = first%table()
     prog%use_first = .not. nullable
@@ -383,27 +384,30 @@ function literal_prefix(ast, id) result(prefix)
     end associate
 end function literal_prefix
 
-recursive logical function is_anchored(ast, id) result(anchored)
-    !! True if every match must start at the beginning of the string (`\A...` or `^...` without MULTILINE).
+recursive logical function is_anchored(ast, id, lines) result(anchored)
+    !! True if every match must start at the beginning of the string (`\A...` or `^...` without
+    !! MULTILINE), or with `lines`, at the beginning of the string or of a line (also `^...` with
+    !! MULTILINE).
     type(ast_t), intent(in) :: ast
     integer, intent(in) :: id
+    logical, intent(in) :: lines
     integer :: k
 
     anchored = .false.
     associate (node => ast%nodes(id))
         select case (node%kind)
         case (N_ASSERT)
-            anchored = node%a == A_BOS .or. node%a == A_BOL
+            anchored = node%a == A_BOS .or. node%a == A_BOL .or. (lines .and. node%a == A_BOL_M)
         case (N_CONCAT)
-            anchored = is_anchored(ast, node%kids(1))
+            anchored = is_anchored(ast, node%kids(1), lines)
         case (N_GROUP, N_ATOMIC)
-            anchored = is_anchored(ast, node%kids(1))
+            anchored = is_anchored(ast, node%kids(1), lines)
         case (N_REPEAT)
-            anchored = node%a >= 1 .and. is_anchored(ast, node%kids(1))
+            anchored = node%a >= 1 .and. is_anchored(ast, node%kids(1), lines)
         case (N_ALT)
             anchored = .true.
             do k = 1, size(node%kids)
-                if (.not. is_anchored(ast, node%kids(k))) then
+                if (.not. is_anchored(ast, node%kids(k), lines)) then
                     anchored = .false.
                     exit
                 end if
