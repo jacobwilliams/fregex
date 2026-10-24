@@ -57,7 +57,7 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found,
     integer, allocatable, intent(inout) :: caps(:)
     logical, intent(out) :: overflow
 
-    integer :: st, last, sp_end, k
+    integer :: st, last, sp_end
 
     found = .false.
     overflow = .false.
@@ -83,10 +83,8 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found,
     do while (st <= last)
         ! skip to the next position where a match can start
         if (len(prog%prefix) > 0) then
-            k = index(s(st:), prog%prefix)
-            if (k == 0) exit
-            st = st + k - 1
-            if (st > last) exit
+            st = find_prefix(s, prog%prefix, st, last)
+            if (st == 0) exit
         else if (prog%use_first) then
             do while (st <= last)
                 if (prog%first(at(s, st))) exit
@@ -404,6 +402,22 @@ pure integer function at(s, i) result(c)
         c = iand(ichar(s(i:i)), 255)
     end if
 end function at
+
+pure integer function find_prefix(s, prefix, from, last) result(pos)
+    !! The first position in `from:last` where `prefix` occurs in `s`, or 0 if there is none.
+    !! This looks for the first byte in a tight loop and only then compares the rest, which is
+    !! several times faster than gfortran's `index`.
+    character(len=*), intent(in) :: s, prefix
+    integer, intent(in) :: from, last
+    integer :: np
+    np = len(prefix)
+    do pos = from, min(last, len(s) - np + 1)
+        if (s(pos:pos) == prefix(1:1)) then
+            if (s(pos:pos + np - 1) == prefix) return
+        end if
+    end do
+    pos = 0
+end function find_prefix
 
 pure logical function byte_matches(prog, pc, c) result(ok)
     !! True if byte `c` (-1 at the end of the string) passes the test of the OP_REPEAT at `pc`.

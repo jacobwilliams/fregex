@@ -138,22 +138,22 @@ python -I tools/benchmark.py --readme      # or: pixi run bench
 
 | Case | Operation | Pattern | Subject | Python `re` | fregex | fregex speed |
 |---|---|---|---|--:|--:|--:|
-| literal, match at end | `search` | `needle` | prose, 200 KB | 39.5 µs | 99.6 µs | 🟥 2.52× slower |
-| no match (full scan) | `search` | `[XYZ]{2}\d` | prose, 200 KB | 1.17 ms | 63.1 µs | 🟩 18.46× faster |
-| words | `find_all` | `\w+` | prose, 200 KB | 2.27 ms | 3.97 ms | 🟥 1.75× slower |
-| case-insensitive literal | `find_all` | `(?i)error` | log, 263 KB | 769 µs | 287 µs | 🟩 2.68× faster |
-| dates | `find_all` | `\d{4}-\d{2}-\d{2}` | log, 263 KB | 1.56 ms | 606 µs | 🟩 2.58× faster |
-| e-mail addresses | `find_all` | `[\w.+-]+@[\w-]+\.\w+` | prose, 200 KB | 3.31 ms | 2.49 ms | 🟩 1.33× faster |
-| alternation of words | `find_all` | `\b(?:alpha\|beta\|gamma\|delta)\b` | prose, 200 KB | 1.34 ms | 821 µs | 🟩 1.63× faster |
-| Fortran declarations | `find_all` | `(?im)^\s*(?P<type>integer\|real\|logical\|character\|type)\b.*::\s*(?P<vars>.*)$` | fortran, 123 KB | 706 µs | 1.25 ms | 🟥 1.78× slower |
-| lookbehind | `find_all` | `(?<=call )\w+` | fortran, 123 KB | 605 µs | 1.01 ms | 🟥 1.67× slower |
-| backreference (doubled words) | `find_all` | `\b(\w+)\s+\1\b` | prose, 200 KB | 2.64 ms | 3.06 ms | 🟥 1.16× slower |
-| collapse whitespace | `sub` | `\s+` | prose, 200 KB | 2.67 ms | 4.27 ms | 🟥 1.60× slower |
-| swap with groups | `sub` | `(\w+)@(\w+)` | prose, 200 KB | 3.29 ms | 4.52 ms | 🟥 1.37× slower |
-| split CSV | `split` | `\s*,\s*` | csv, 12 KB | 139 µs | 256 µs | 🟥 1.84× slower |
-| short fullmatch | `fullmatch` | `(\d{4})-(\d{2})-(\d{2})` | date, 10 B | 71.7 ns | 166 ns | 🟥 2.32× slower |
-| compile e-mail pattern | `compile` | `[\w.+-]+@[\w-]+\.\w+` | — | 9.96 µs | 1.56 µs | 🟩 6.37× faster |
-| compile declaration pattern | `compile` | `(?im)^\s*(?P<type>integer\|real\|logical\|character\|type)\b.*::\s*(?P<vars>.*)$` | — | 75.6 µs | 7.19 µs | 🟩 10.51× faster |
+| literal, match at end | `search` | `needle` | prose, 200 KB | 42.6 µs | 48.2 µs | 🟥 1.13× slower |
+| no match (full scan) | `search` | `[XYZ]{2}\d` | prose, 200 KB | 1.13 ms | 70.1 µs | 🟩 16.13× faster |
+| words | `find_all` | `\w+` | prose, 200 KB | 2.19 ms | 3.87 ms | 🟥 1.76× slower |
+| case-insensitive literal | `find_all` | `(?i)error` | log, 263 KB | 745 µs | 302 µs | 🟩 2.47× faster |
+| dates | `find_all` | `\d{4}-\d{2}-\d{2}` | log, 263 KB | 1.51 ms | 624 µs | 🟩 2.43× faster |
+| e-mail addresses | `find_all` | `[\w.+-]+@[\w-]+\.\w+` | prose, 200 KB | 3.03 ms | 2.47 ms | 🟩 1.23× faster |
+| alternation of words | `find_all` | `\b(?:alpha\|beta\|gamma\|delta)\b` | prose, 200 KB | 1.23 ms | 836 µs | 🟩 1.47× faster |
+| Fortran declarations | `find_all` | `(?im)^\s*(?P<type>integer\|real\|logical\|character\|type)\b.*::\s*(?P<vars>.*)$` | fortran, 123 KB | 666 µs | 1.24 ms | 🟥 1.86× slower |
+| lookbehind | `find_all` | `(?<=call )\w+` | fortran, 123 KB | 606 µs | 1.01 ms | 🟥 1.66× slower |
+| backreference (doubled words) | `find_all` | `\b(\w+)\s+\1\b` | prose, 200 KB | 2.51 ms | 3.09 ms | 🟥 1.23× slower |
+| collapse whitespace | `sub` | `\s+` | prose, 200 KB | 2.63 ms | 4.24 ms | 🟥 1.61× slower |
+| swap with groups | `sub` | `(\w+)@(\w+)` | prose, 200 KB | 3.3 ms | 4.48 ms | 🟥 1.36× slower |
+| split CSV | `split` | `\s*,\s*` | csv, 12 KB | 137 µs | 252 µs | 🟥 1.84× slower |
+| short fullmatch | `fullmatch` | `(\d{4})-(\d{2})-(\d{2})` | date, 10 B | 70.2 ns | 169 ns | 🟥 2.40× slower |
+| compile e-mail pattern | `compile` | `[\w.+-]+@[\w-]+\.\w+` | — | 9.93 µs | 1.56 µs | 🟩 6.36× faster |
+| compile declaration pattern | `compile` | `(?im)^\s*(?P<type>integer\|real\|logical\|character\|type)\b.*::\s*(?P<vars>.*)$` | — | 75.6 µs | 6.98 µs | 🟩 10.84× faster |
 
 Measured 2026-10-24 on Apple M5: Python 3.13.17 `re` on `bytes`, GNU Fortran 15.3.0 with `--profile release --flag "-O3 -march=native -flto"`. Times are per operation, best of the repeated runs. Regenerate with `python -I tools/benchmark.py --readme`.
 
