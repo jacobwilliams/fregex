@@ -257,13 +257,14 @@ function regex_split(self, string, maxsplit, stat, errmsg) result(parts)
     type(regex_string_t), allocatable :: parts(:)
 
     integer, allocatable :: caps(:)
-    integer :: pos, forbid, last, nsplit, limit, g, ierr
+    integer :: pos, forbid, last, nsplit, limit, g, ierr, nparts
     logical :: found
     character(len=:), allocatable :: msg
 
     limit = 0
     if (present(maxsplit)) limit = maxsplit
-    allocate (parts(0))
+    allocate (parts(4))
+    nparts = 0
     last = 1
     nsplit = 0
     pos = 1
@@ -273,20 +274,37 @@ function regex_split(self, string, maxsplit, stat, errmsg) result(parts)
         if (limit > 0 .and. nsplit >= limit) exit
         call self%exec(string, pos, MODE_SEARCH, forbid, found, caps, ierr, msg)
         if (ierr /= RE_OK .or. .not. found) exit
-        parts = [parts, regex_string_t(string(last:caps(0) - 1))]
+        call push(string(last:caps(0) - 1))
         do g = 1, self%prog%ngroups
             if (caps(2*g) > 0 .and. caps(2*g + 1) > 0) then
-                parts = [parts, regex_string_t(string(caps(2*g):caps(2*g + 1) - 1))]
+                call push(string(caps(2*g):caps(2*g + 1) - 1))
             else
-                parts = [parts, regex_string_t('')]
+                call push('')
             end if
         end do
         last = caps(1)
         nsplit = nsplit + 1
         call advance(caps, pos, forbid)
     end do
-    parts = [parts, regex_string_t(string(last:))]
+    call push(string(last:))
+    parts = parts(1:nparts)
     call finish(ierr, msg, stat, errmsg)
+
+contains
+
+    subroutine push(piece)
+        !! Append a piece, doubling the array when it is full.
+        character(len=*), intent(in) :: piece
+        type(regex_string_t), allocatable :: tmp(:)
+        if (nparts == size(parts)) then
+            allocate (tmp(2*nparts))
+            tmp(1:nparts) = parts(1:nparts)
+            call move_alloc(tmp, parts)
+        end if
+        nparts = nparts + 1
+        parts(nparts)%s = piece
+    end subroutine push
+
 end function regex_split
 
 function sub_template(self, string, repl, count, nsubs, stat, errmsg) result(out)

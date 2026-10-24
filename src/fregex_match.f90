@@ -11,7 +11,8 @@ type, public :: match_t
     !! group `k`. An empty match has `end = start - 1`. A group that did not take part in the
     !! match has `start = 0` and `end = -1`, so its text is the empty string.
     private
-    character(len=:), allocatable :: subject
+    character(len=:), allocatable :: text        !! the part of the subject that the groups cover
+    integer :: offset = 0                        !! position in the subject of `text(1:1)`, minus 1
     integer, allocatable :: spans(:, :)          !! (2, 0:ngroups)
     type(regex_string_t), allocatable :: names(:)      !! (1:ngroups)
 contains
@@ -25,7 +26,6 @@ contains
     generic :: matched => matched_by_index, matched_by_name
     procedure :: group_count
     procedure :: group_index
-    procedure :: subject_text
 end type match_t
 
 contains
@@ -36,18 +36,25 @@ pure function new_match(subject, caps, names) result(m)
     integer, intent(in) :: caps(0:)
     type(regex_string_t), intent(in) :: names(:)
     type(match_t) :: m
-    integer :: k
+    integer :: k, lo, hi
 
-    m%subject = subject
     m%names = names
     allocate (m%spans(2, 0:size(caps)/2 - 1))
+    lo = huge(lo)
+    hi = 0
     do k = 0, size(caps)/2 - 1
         if (caps(2*k) > 0 .and. caps(2*k + 1) > 0) then
             m%spans(:, k) = [caps(2*k), caps(2*k + 1) - 1]
+            lo = min(lo, m%spans(1, k))
+            hi = max(hi, m%spans(2, k))
         else
             m%spans(:, k) = [0, -1]
         end if
     end do
+    ! Only the covered text is kept (groups in a lookaround can lie outside group 0), so that
+    ! find_all does not copy the whole subject for every match.
+    m%offset = lo - 1
+    m%text = subject(lo:hi)
 end function new_match
 
 pure integer function group_count(self)
@@ -71,14 +78,6 @@ pure integer function group_index(self, name) result(g)
     g = 0
 end function group_index
 
-pure function subject_text(self) result(s)
-    !! The string that was searched.
-    class(match_t), intent(in) :: self
-    character(len=:), allocatable :: s
-    s = ''
-    if (allocated(self%subject)) s = self%subject
-end function subject_text
-
 pure function group_by_index(self, k) result(text)
     !! Text of group `k` (default 0, the whole match).
     class(match_t), intent(in) :: self
@@ -86,7 +85,7 @@ pure function group_by_index(self, k) result(text)
     character(len=:), allocatable :: text
     integer :: g
     g = checked_index(self, k)
-    text = self%subject(self%spans(1, g):self%spans(2, g))
+    text = self%text(self%spans(1, g) - self%offset:self%spans(2, g) - self%offset)
 end function group_by_index
 
 pure function group_by_name(self, name) result(text)

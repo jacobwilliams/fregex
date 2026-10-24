@@ -124,6 +124,41 @@ The `re_*` convenience functions stop on an invalid pattern.
 A repeated sub-pattern that can match the empty string stops repeating after an iteration that
 consumes nothing, as Python's engine does. This also rules out infinite loops.
 
+## Performance
+
+Python's `re` and fregex on the same patterns and generated texts, with results checked to agree.
+The cases are defined in [tools/benchmark.py](tools/benchmark.py), which builds and runs
+[bench/benchmark.f90](bench/benchmark.f90) and rewrites this table:
+
+```sh
+python -I tools/benchmark.py --readme      # or: pixi run bench
+```
+
+<!-- benchmark:start -->
+
+| Case | Operation | Pattern | Subject | Python `re` | fregex | fregex speed |
+|---|---|---|---|--:|--:|--:|
+| literal, match at end | `search` | `needle` | prose, 200 KB | 38 µs | 298 µs | 🟥 7.83× slower |
+| no match (full scan) | `search` | `[XYZ]{2}\d` | prose, 200 KB | 1.13 ms | 197 µs | 🟩 5.77× faster |
+| words | `find_all` | `\w+` | prose, 200 KB | 2.27 ms | 18.5 ms | 🟥 8.12× slower |
+| case-insensitive literal | `find_all` | `(?i)error` | log, 263 KB | 758 µs | 772 µs | 🟨 1.02× slower |
+| dates | `find_all` | `\d{4}-\d{2}-\d{2}` | log, 263 KB | 1.59 ms | 1.98 ms | 🟥 1.25× slower |
+| e-mail addresses | `find_all` | `[\w.+-]+@[\w-]+\.\w+` | prose, 200 KB | 3.16 ms | 5.03 ms | 🟥 1.59× slower |
+| alternation of words | `find_all` | `\b(?:alpha\|beta\|gamma\|delta)\b` | prose, 200 KB | 1.26 ms | 1.99 ms | 🟥 1.57× slower |
+| Fortran declarations | `find_all` | `(?im)^\s*(?P<type>integer\|real\|logical\|character\|type)\b.*::\s*(?P<vars>.*)$` | fortran, 123 KB | 674 µs | 2.21 ms | 🟥 3.28× slower |
+| lookbehind | `find_all` | `(?<=call )\w+` | fortran, 123 KB | 607 µs | 1.49 ms | 🟥 2.46× slower |
+| backreference (doubled words) | `find_all` | `\b(\w+)\s+\1\b` | prose, 200 KB | 2.57 ms | 5.09 ms | 🟥 1.98× slower |
+| collapse whitespace | `sub` | `\s+` | prose, 200 KB | 2.83 ms | 6.76 ms | 🟥 2.39× slower |
+| swap with groups | `sub` | `(\w+)@(\w+)` | prose, 200 KB | 3.32 ms | 7.11 ms | 🟥 2.14× slower |
+| split CSV | `split` | `\s*,\s*` | csv, 12 KB | 139 µs | 429 µs | 🟥 3.10× slower |
+| short fullmatch | `fullmatch` | `(\d{4})-(\d{2})-(\d{2})` | date, 10 B | 71.2 ns | 258 ns | 🟥 3.62× slower |
+| compile e-mail pattern | `compile` | `[\w.+-]+@[\w-]+\.\w+` | — | 10 µs | 1.45 µs | 🟩 6.93× faster |
+| compile declaration pattern | `compile` | `(?im)^\s*(?P<type>integer\|real\|logical\|character\|type)\b.*::\s*(?P<vars>.*)$` | — | 76 µs | 7.54 µs | 🟩 10.08× faster |
+
+Measured 2026-10-24 on Apple M5: Python 3.13.17 `re` on `bytes`, GNU Fortran 15.3.0 with `--profile release --flag "-O3 -march=native -flto"`. Times are per operation, best of the repeated runs. Regenerate with `python -I tools/benchmark.py --readme`.
+
+<!-- benchmark:end -->
+
 ## Testing
 
 ```sh

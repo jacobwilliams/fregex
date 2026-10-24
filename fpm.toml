@@ -19,3 +19,8 @@ source-form = "free"
 
 [dev-dependencies]
 test-drive = { git = "https://github.com/fortran-lang/test-drive", tag = "v0.5.0" }
+
+[[example]]
+name = "benchmark"
+source-dir = "bench"
+main = "benchmark.f90"

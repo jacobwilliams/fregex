@@ -16,6 +16,7 @@ check-corpus = { cmd = "fpm test check_corpus --profile release --", description
 regex-build = { cmd = "fpm build", cwd = "fregex", description = "Build the fregex library" }
 regex-test = { cmd = "fpm test", cwd = "fregex", description = "Run the fregex tests" }
 regex-gen = { cmd = "python -I tools/gen_conformance.py", cwd = "fregex", description = "Regenerate fregex conformance data from Python's re (uses ../../fprettify if present)" }
+bench = { cmd = "python -I tools/benchmark.py --readme", description = "Time fregex against Python's re and update the table in README.md" }
 
 [dependencies]
 gfortran = "15.*"
