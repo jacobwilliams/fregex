@@ -18,10 +18,14 @@ subroutine compile_ast(ast, prog, errmsg)
     type(ast_t), intent(in) :: ast
     type(program_t), intent(out) :: prog
     character(len=:), allocatable, intent(out) :: errmsg
-    integer :: pc
+    integer :: pc, k
     logical :: nullable
+    type(charset_t) :: first
 
-    prog%sets = ast%sets(1:ast%nsets)
+    allocate (prog%sets(-1:255, ast%nsets))
+    do k = 1, ast%nsets
+        prog%sets(:, k) = ast%sets(k)%table()
+    end do
     prog%ngroups = ast%ngroups
     prog%names = ast%names
 
@@ -32,8 +36,10 @@ subroutine compile_ast(ast, prog, errmsg)
     pc = prog%emit(OP_MATCH)
 
     prog%anchored = is_anchored(ast, ast%root)
-    call first_set(ast, ast%root, prog%first, nullable)
+    call first_set(ast, ast%root, first, nullable)
+    prog%first = first%table()
     prog%use_first = .not. nullable
+    prog%prefix = literal_prefix(ast, ast%root)
 end subroutine compile_ast
 
 recursive subroutine emit_node(ast, prog, id, errmsg)
@@ -88,7 +94,9 @@ recursive subroutine emit_node(ast, prog, id, errmsg)
             call emit_node(ast, prog, node%kids(1), errmsg)
             pc = prog%emit(OP_SAVE, 2*node%a + 1)
         case (N_REPEAT)
-            if (node%c == R_POSSESSIVE) then
+            if (is_single_byte(ast, node%kids(1))) then
+                call emit_single_repeat(ast, prog, node%kids(1), node%a, node%b, node%c)
+            else if (node%c == R_POSSESSIVE) then
                 pc = prog%emit(OP_ATOMIC)
                 call emit_repeat(ast, prog, node%kids(1), node%a, node%b, .true., errmsg)
                 k = prog%emit(OP_SUCCEED)
@@ -183,6 +191,59 @@ contains
     end subroutine emit_iteration
 
 end subroutine emit_repeat
+
+subroutine emit_single_repeat(ast, prog, body, qmin, qmax, mode)
+    !! Emit `body{qmin,qmax}` for a body that matches exactly one byte, as one OP_REPEAT. The VM
+    !! then consumes the bytes in a loop and keeps one backtracking entry instead of one per byte.
+    type(ast_t), intent(in) :: ast
+    type(program_t), intent(inout) :: prog
+    integer, intent(in) :: body, qmin, qmax, mode
+    integer :: test, arg, pc
+
+    associate (node => ast%nodes(body))
+        select case (node%kind)
+        case (N_CHAR)
+            if (node%b == 1) then
+                test = OP_CHARI
+                arg = to_lower_code(node%a)
+            else
+                test = OP_CHAR
+                arg = node%a
+            end if
+        case (N_ANY)
+            test = merge(OP_ANYNL, OP_ANY, node%a == 1)
+            arg = 0
+        case default   ! N_SET
+            test = OP_SET
+            arg = node%a
+        end select
+    end associate
+    pc = prog%emit(OP_REPEAT, test, arg, qmin, merge(UNBOUNDED, qmax, qmax == INF), rep_mode(mode))
+end subroutine emit_single_repeat
+
+pure integer function rep_mode(mode)
+    integer, intent(in) :: mode
+    select case (mode)
+    case (R_LAZY)
+        rep_mode = REP_LAZY
+    case (R_POSSESSIVE)
+        rep_mode = REP_POSSESSIVE
+    case default
+        rep_mode = REP_GREEDY
+    end select
+end function rep_mode
+
+logical function is_single_byte(ast, id)
+    !! True if node `id` always matches exactly one byte.
+    type(ast_t), intent(in) :: ast
+    integer, intent(in) :: id
+    select case (ast%nodes(id)%kind)
+    case (N_CHAR, N_ANY, N_SET)
+        is_single_byte = .true.
+    case default
+        is_single_byte = .false.
+    end select
+end function is_single_byte
 
 pure integer function assert_op(kind) result(op)
     integer, intent(in) :: kind
@@ -283,6 +344,29 @@ pure integer function mul_width(a, b) result(w)
         w = a*b
     end if
 end function mul_width
+
+function literal_prefix(ast, id) result(prefix)
+    !! The case-sensitive literal bytes that every match starts with, e.g. `ab` for `ab\d+`.
+    !! Only a leading run of plain characters is recognized, which covers the common cases.
+    type(ast_t), intent(in) :: ast
+    integer, intent(in) :: id
+    character(len=:), allocatable :: prefix
+    integer :: k, kid
+
+    prefix = ''
+    associate (node => ast%nodes(id))
+        select case (node%kind)
+        case (N_CHAR)
+            if (node%b == 0) prefix = achar(node%a)
+        case (N_CONCAT)
+            do k = 1, size(node%kids)
+                kid = node%kids(k)
+                if (ast%nodes(kid)%kind /= N_CHAR .or. ast%nodes(kid)%b /= 0) exit
+                prefix = prefix//achar(ast%nodes(kid)%a)
+            end do
+        end select
+    end associate
+end function literal_prefix
 
 recursive logical function is_anchored(ast, id) result(anchored)
     !! True if every match must start at the beginning of the string (`\A...` or `^...` without MULTILINE).

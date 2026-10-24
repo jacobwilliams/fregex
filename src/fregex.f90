@@ -15,8 +15,8 @@ use fregex_string, only: regex_string_t, string_builder_t
 use fregex_parser, only: ast_t, parse_pattern, F_IGNORECASE, F_MULTILINE, F_DOTALL
 use fregex_program, only: program_t
 use fregex_compiler, only: compile_ast
-use fregex_vm, only: vm_exec, MODE_SEARCH, MODE_MATCH, MODE_FULLMATCH
-use fregex_match, only: match_t, new_match
+use fregex_vm, only: vm_t, vm_exec, MODE_SEARCH, MODE_MATCH, MODE_FULLMATCH
+use fregex_match, only: match_t, new_match, init_match
 use fregex_template, only: template_t, parse_template, expand_template
 implicit none
 private
@@ -219,29 +219,33 @@ function regex_find_all(self, string, stat, errmsg) result(matches)
     character(len=:), allocatable, intent(out), optional :: errmsg
     type(match_t), allocatable :: matches(:)
 
-    type(match_t), allocatable :: tmp(:)
-    integer, allocatable :: caps(:)
-    integer :: pos, forbid, nfound, ierr
+    type(vm_t) :: vm
+    integer, allocatable :: caps(:), all_caps(:, :), tmp(:, :)
+    integer :: pos, forbid, nfound, ierr, k
     logical :: found
     character(len=:), allocatable :: msg
 
-    allocate (matches(4))
     nfound = 0
     pos = 1
     forbid = 0
     do
-        call self%exec(string, pos, MODE_SEARCH, forbid, found, caps, ierr, msg)
+        call self%exec(string, pos, MODE_SEARCH, forbid, vm, found, caps, ierr, msg)
         if (ierr /= RE_OK .or. .not. found) exit
-        if (nfound == size(matches)) then
-            allocate (tmp(2*nfound))
-            tmp(1:nfound) = matches(1:nfound)
-            call move_alloc(tmp, matches)
+        if (.not. allocated(all_caps)) allocate (all_caps(0:size(caps) - 1, 16))
+        if (nfound == size(all_caps, 2)) then
+            allocate (tmp(0:size(caps) - 1, 2*nfound))
+            tmp(:, 1:nfound) = all_caps(:, 1:nfound)
+            call move_alloc(tmp, all_caps)
         end if
         nfound = nfound + 1
-        matches(nfound) = new_match(string, caps, self%prog%names)
+        all_caps(:, nfound) = caps
         call advance(caps, pos, forbid)
     end do
-    matches = matches(1:nfound)
+    ! The matches are built at the end, so that growing the list only copies integers.
+    allocate (matches(nfound))
+    do k = 1, nfound
+        call init_match(matches(k), string, all_caps(:, k), self%prog%names)
+    end do
     call finish(ierr, msg, stat, errmsg)
 end function regex_find_all
 
@@ -256,6 +260,7 @@ function regex_split(self, string, maxsplit, stat, errmsg) result(parts)
     character(len=:), allocatable, intent(out), optional :: errmsg
     type(regex_string_t), allocatable :: parts(:)
 
+    type(vm_t) :: vm
     integer, allocatable :: caps(:)
     integer :: pos, forbid, last, nsplit, limit, g, ierr, nparts
     logical :: found
@@ -272,7 +277,7 @@ function regex_split(self, string, maxsplit, stat, errmsg) result(parts)
     ierr = RE_OK
     do
         if (limit > 0 .and. nsplit >= limit) exit
-        call self%exec(string, pos, MODE_SEARCH, forbid, found, caps, ierr, msg)
+        call self%exec(string, pos, MODE_SEARCH, forbid, vm, found, caps, ierr, msg)
         if (ierr /= RE_OK .or. .not. found) exit
         call push(string(last:caps(0) - 1))
         do g = 1, self%prog%ngroups
@@ -366,6 +371,7 @@ function substitute(self, string, replacer, count, nsubs, stat, errmsg) result(o
     character(len=:), allocatable :: out
 
     type(string_builder_t) :: buf
+    type(vm_t) :: vm
     integer, allocatable :: caps(:)
     integer :: pos, forbid, last, n, limit, ierr
     logical :: found
@@ -380,7 +386,7 @@ function substitute(self, string, replacer, count, nsubs, stat, errmsg) result(o
     ierr = RE_OK
     do
         if (limit > 0 .and. n >= limit) exit
-        call self%exec(string, pos, MODE_SEARCH, forbid, found, caps, ierr, msg)
+        call self%exec(string, pos, MODE_SEARCH, forbid, vm, found, caps, ierr, msg)
         if (ierr /= RE_OK .or. .not. found) exit
         call buf%append(string(last:caps(0) - 1))
         call buf%append(replacer%replace(string, caps, self%prog%names))
@@ -423,24 +429,27 @@ logical function exec_one(self, string, mode, m, pos, stat, errmsg) result(found
     integer, intent(out), optional :: stat
     character(len=:), allocatable, intent(out), optional :: errmsg
 
+    type(vm_t) :: vm
     integer, allocatable :: caps(:)
     integer :: start, ierr
     character(len=:), allocatable :: msg
 
     start = 1
     if (present(pos)) start = max(1, pos)
-    call self%exec(string, start, mode, 0, found, caps, ierr, msg)
-    if (found .and. present(m)) m = new_match(string, caps, self%prog%names)
+    call self%exec(string, start, mode, 0, vm, found, caps, ierr, msg)
+    if (found .and. present(m)) call init_match(m, string, caps, self%prog%names)
     call finish(ierr, msg, stat, errmsg)
 end function exec_one
 
-subroutine exec(self, string, start, mode, forbid, found, caps, ierr, msg)
-    !! Run the VM. `ierr` is RE_OK or an error code, with `msg` describing it.
+subroutine exec(self, string, start, mode, forbid, vm, found, caps, ierr, msg)
+    !! Run the VM. `ierr` is RE_OK or an error code, with `msg` describing it. `vm` is work
+    !! space that callers making several searches reuse.
     class(regex_t), intent(in) :: self
     character(len=*), intent(in) :: string
     integer, intent(in) :: start, mode, forbid
+    type(vm_t), intent(inout) :: vm
     logical, intent(out) :: found
-    integer, allocatable, intent(out) :: caps(:)
+    integer, allocatable, intent(inout) :: caps(:)
     integer, intent(out) :: ierr
     character(len=:), allocatable, intent(inout) :: msg
     logical :: overflow
@@ -453,7 +462,7 @@ subroutine exec(self, string, start, mode, forbid, found, caps, ierr, msg)
         return
     end if
     if (start > len(string) + 1) return
-    call vm_exec(self%prog, string, start, mode, forbid, self%step_limit, found, caps, overflow)
+    call vm_exec(self%prog, string, start, mode, forbid, self%step_limit, vm, found, caps, overflow)
     if (overflow) then
         found = .false.
         ierr = RE_ERR_STEP_LIMIT

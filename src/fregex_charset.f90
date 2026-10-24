@@ -16,6 +16,7 @@ contains
     procedure :: has => charset_has
     procedure :: negate => charset_negate
     procedure :: fold_case => charset_fold_case
+    procedure :: table => charset_table
 end type charset_t
 
 contains
@@ -52,6 +53,17 @@ pure logical function charset_has(self, c) result(has)
         has = btest(self%bits(c/64), mod(c, 64))
     end if
 end function charset_has
+
+pure function charset_table(self) result(table)
+    !! The set as a lookup table indexed by byte value. Index -1 ("end of string") is never a member.
+    class(charset_t), intent(in) :: self
+    logical :: table(-1:255)
+    integer :: c
+    table(-1) = .false.
+    do c = 0, 255
+        table(c) = btest(self%bits(c/64), mod(c, 64))
+    end do
+end function charset_table
 
 pure subroutine charset_negate(self)
     class(charset_t), intent(inout) :: self

@@ -4,7 +4,7 @@ use fregex_string, only: regex_string_t, to_str
 implicit none
 private
 
-public :: new_match
+public :: new_match, init_match
 
 type, public :: match_t
     !! Group spans are 1-based and inclusive, so `string(m%start(k):m%end(k))` is the text of
@@ -36,9 +36,24 @@ pure function new_match(subject, caps, names) result(m)
     integer, intent(in) :: caps(0:)
     type(regex_string_t), intent(in) :: names(:)
     type(match_t) :: m
+    call init_match(m, subject, caps, names)
+end function new_match
+
+pure subroutine init_match(m, subject, caps, names)
+    !! Like new_match, but fills `m` in place, which avoids copying the result.
+    type(match_t), intent(out) :: m
+    character(len=*), intent(in) :: subject
+    integer, intent(in) :: caps(0:)
+    type(regex_string_t), intent(in) :: names(:)
     integer :: k, lo, hi
 
-    m%names = names
+    ! names are only needed for lookups by name, so they are not copied if no group has one
+    do k = 1, size(names)
+        if (len(names(k)%s) > 0) then
+            m%names = names
+            exit
+        end if
+    end do
     allocate (m%spans(2, 0:size(caps)/2 - 1))
     lo = huge(lo)
     hi = 0
@@ -55,7 +70,7 @@ pure function new_match(subject, caps, names) result(m)
     ! find_all does not copy the whole subject for every match.
     m%offset = lo - 1
     m%text = subject(lo:hi)
-end function new_match
+end subroutine init_match
 
 pure integer function group_count(self)
     !! Number of capture groups in the pattern (not counting group 0, the whole match).

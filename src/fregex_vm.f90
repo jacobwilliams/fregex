@@ -6,7 +6,7 @@ module fregex_vm
 !! is found to resume from. Lookarounds and atomic groups run their body in a nested call.
 use iso_fortran_env, only: int64
 use fregex_program
-use fregex_string, only: byte_at, to_lower_code, is_word_code
+use fregex_string, only: to_lower_code, is_word_code
 implicit none
 private
 
@@ -19,11 +19,16 @@ integer, parameter, public :: MODE_FULLMATCH = 2  !! match must start at `start`
 integer, parameter :: BT_BRANCH = 1   !! resume at pc x, position y
 integer, parameter :: BT_CAP = 2      !! restore capture slot x to y
 integer, parameter :: BT_REG = 3      !! restore register x to y
+integer, parameter :: BT_GREEDY = 4   !! OP_REPEAT at pc x is at position y and may give back bytes down to z
+integer, parameter :: BT_LAZY = 5     !! OP_REPEAT at pc x is at position y and may take more bytes up to z
 
-type :: vm_t
+type, public :: vm_t
+    !! Work space for vm_exec. It can be reused for several searches with the same program, which
+    !! saves allocating it for every match in find_all, split and sub.
+    private
     integer, allocatable :: caps(:)        !! (0:2*ngroups+1), positions; 0 if unset
     integer, allocatable :: regs(:)
-    integer, allocatable :: stack(:, :)    !! (3, capacity): kind, x, y
+    integer, allocatable :: stack(:, :)    !! (4, capacity): kind, x, y, z
     integer :: top = 0
     integer(int64) :: steps = 0
     integer(int64) :: step_limit = 0
@@ -34,10 +39,12 @@ end type vm_t
 
 contains
 
-subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, found, caps, overflow)
+subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, vm, found, caps, overflow)
     !! Run `prog` on `s`. On success `caps` holds the capture positions: slot `2k` is the first
     !! index of group k, slot `2k+1` is one past its last index, and 0 means the group did not match.
+    !! `caps` is only reallocated if its size is wrong, and is left unchanged if nothing is found.
     !!
+    !! `vm` is work space, which may be reused from an earlier call with the same program.
     !! `overflow` is set if the step limit was exceeded before an answer was found.
     type(program_t), intent(in) :: prog
     character(len=*), intent(in) :: s
@@ -45,16 +52,20 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, found, cap
     integer, intent(in) :: mode
     integer, intent(in) :: forbid_empty_at
     integer(int64), intent(in) :: step_limit
+    type(vm_t), intent(inout) :: vm
     logical, intent(out) :: found
-    integer, allocatable, intent(out) :: caps(:)
+    integer, allocatable, intent(inout) :: caps(:)
     logical, intent(out) :: overflow
 
-    type(vm_t) :: vm
-    integer :: st, last, sp_end
+    integer :: st, last, sp_end, k
 
     found = .false.
     overflow = .false.
-    allocate (vm%caps(0:2*prog%ngroups + 1), vm%regs(max(1, prog%nregs)), vm%stack(3, 64))
+    if (.not. allocated(vm%caps)) then
+        allocate (vm%caps(0:2*prog%ngroups + 1), vm%regs(max(1, prog%nregs)), vm%stack(4, 64))
+    end if
+    vm%steps = 0
+    vm%overflow = .false.
     vm%step_limit = step_limit
     vm%forbid_empty_at = forbid_empty_at
     vm%require_end = mode == MODE_FULLMATCH
@@ -63,22 +74,36 @@ subroutine vm_exec(prog, s, start, mode, forbid_empty_at, step_limit, found, cap
     if (mode /= MODE_SEARCH) last = start
     if (prog%anchored) last = min(last, 1)
 
-    do st = max(1, start), last
-        if (prog%use_first) then
-            if (.not. prog%first%has(byte_at(s, st))) cycle
+    ! A failed attempt pops everything it pushed, which restores the captures and registers, so
+    ! they only need clearing once.
+    vm%caps = 0
+    vm%regs = 0
+    vm%top = 0
+    st = max(1, start)
+    do while (st <= last)
+        ! skip to the next position where a match can start
+        if (len(prog%prefix) > 0) then
+            k = index(s(st:), prog%prefix)
+            if (k == 0) exit
+            st = st + k - 1
+            if (st > last) exit
+        else if (prog%use_first) then
+            do while (st <= last)
+                if (prog%first(at(s, st))) exit
+                st = st + 1
+            end do
+            if (st > last) exit
         end if
-        vm%caps = 0
-        vm%regs = 0
-        vm%top = 0
         if (run(prog, s, vm, 1, st, sp_end)) then
             found = .true.
-            call move_alloc(vm%caps, caps)
+            caps = vm%caps
             return
         end if
         if (vm%overflow) then
             overflow = .true.
             return
         end if
+        st = st + 1
     end do
 end subroutine vm_exec
 
@@ -93,7 +118,7 @@ recursive function run(prog, s, vm, pc0, sp0, sp_out) result(ok)
     integer, intent(out) :: sp_out
     logical :: ok
 
-    integer :: base, pc, sp, n, c, k, t0, st, lo, hi, sub_sp, gs, ge, glen
+    integer :: base, pc, sp, n, c, k, t0, st, lo, hi, sub_sp, gs, ge, glen, mode
     logical :: fail, sub_ok, negated
 
     n = len(s)
@@ -113,21 +138,21 @@ recursive function run(prog, s, vm, pc0, sp0, sp_out) result(ok)
         fail = .false.
         select case (prog%code(0, pc))
         case (OP_CHAR)
-            if (byte_at(s, sp) == prog%code(1, pc)) then
+            if (at(s, sp) == prog%code(1, pc)) then
                 sp = sp + 1
                 pc = pc + 1
             else
                 fail = .true.
             end if
         case (OP_CHARI)
-            if (to_lower_code(byte_at(s, sp)) == prog%code(1, pc)) then
+            if (to_lower_code(at(s, sp)) == prog%code(1, pc)) then
                 sp = sp + 1
                 pc = pc + 1
             else
                 fail = .true.
             end if
         case (OP_ANY)
-            c = byte_at(s, sp)
+            c = at(s, sp)
             if (c >= 0 .and. c /= 10) then
                 sp = sp + 1
                 pc = pc + 1
@@ -142,25 +167,53 @@ recursive function run(prog, s, vm, pc0, sp0, sp_out) result(ok)
                 fail = .true.
             end if
         case (OP_SET)
-            if (prog%sets(prog%code(1, pc))%has(byte_at(s, sp))) then
+            if (prog%sets(at(s, sp), prog%code(1, pc))) then
                 sp = sp + 1
                 pc = pc + 1
             else
                 fail = .true.
             end if
+        case (OP_REPEAT)
+            ! lo and hi: the positions the repeat may end at
+            lo = sp + prog%code(3, pc)
+            if (prog%code(4, pc) == UNBOUNDED) then
+                hi = n + 1
+            else
+                hi = min(n + 1, sp + prog%code(4, pc))
+            end if
+            mode = prog%code(5, pc)
+            if (mode == REP_LAZY) then
+                k = scan_repeat(prog, pc, s, sp, lo)
+                if (k < lo) then
+                    fail = .true.
+                else
+                    if (lo < hi) call push(vm, BT_LAZY, pc, lo, hi)
+                    sp = lo
+                    pc = pc + 1
+                end if
+            else
+                k = scan_repeat(prog, pc, s, sp, hi)
+                if (k < lo) then
+                    fail = .true.
+                else
+                    if (mode == REP_GREEDY .and. k > lo) call push(vm, BT_GREEDY, pc, k, lo)
+                    sp = k
+                    pc = pc + 1
+                end if
+            end if
         case (OP_SPLIT)
-            call push(vm, BT_BRANCH, prog%code(2, pc), sp)
+            call push(vm, BT_BRANCH, prog%code(2, pc), sp, 0)
             pc = prog%code(1, pc)
         case (OP_JMP)
             pc = prog%code(1, pc)
         case (OP_SAVE)
             k = prog%code(1, pc)
-            call push(vm, BT_CAP, k, vm%caps(k))
+            call push(vm, BT_CAP, k, vm%caps(k), 0)
             vm%caps(k) = sp
             pc = pc + 1
         case (OP_MARK)
             k = prog%code(1, pc)
-            call push(vm, BT_REG, k, vm%regs(k))
+            call push(vm, BT_REG, k, vm%regs(k), 0)
             vm%regs(k) = sp
             pc = pc + 1
         case (OP_CHECK_EXIT)
@@ -186,7 +239,7 @@ recursive function run(prog, s, vm, pc0, sp0, sp_out) result(ok)
                     if (prog%code(2, pc) == 1) then
                         fail = .false.
                         do c = 0, glen - 1
-                            if (to_lower_code(byte_at(s, sp + c)) /= to_lower_code(byte_at(s, gs + c))) then
+                            if (to_lower_code(at(s, sp + c)) /= to_lower_code(at(s, gs + c))) then
                                 fail = .true.
                                 exit
                             end if
@@ -216,7 +269,7 @@ recursive function run(prog, s, vm, pc0, sp0, sp_out) result(ok)
             t0 = vm%top
             negated = prog%code(2, pc) == 1
             k = prog%code(5, pc)
-            call push(vm, BT_REG, k, vm%regs(k))
+            call push(vm, BT_REG, k, vm%regs(k), 0)
             vm%regs(k) = sp
             ! try every start position allowed by the body's width, nearest first
             hi = sp - prog%code(3, pc)
@@ -286,6 +339,25 @@ recursive function run(prog, s, vm, pc0, sp0, sp_out) result(ok)
                     pc = vm%stack(2, k)
                     sp = vm%stack(3, k)
                     exit
+                case (BT_GREEDY)   ! give back one byte, keeping the entry while more can be given back
+                    pc = vm%stack(2, k) + 1
+                    sp = vm%stack(3, k) - 1
+                    if (sp > vm%stack(4, k)) then
+                        vm%stack(3, k) = sp
+                        vm%top = k
+                    end if
+                    exit
+                case (BT_LAZY)   ! take one more byte if it matches, else keep backtracking
+                    sp = vm%stack(3, k)
+                    if (byte_matches(prog, vm%stack(2, k), at(s, sp))) then
+                        pc = vm%stack(2, k) + 1
+                        sp = sp + 1
+                        if (sp < vm%stack(4, k)) then
+                            vm%stack(3, k) = sp
+                            vm%top = k
+                        end if
+                        exit
+                    end if
                 case (BT_CAP)
                     vm%caps(vm%stack(2, k)) = vm%stack(3, k)
                 case (BT_REG)
@@ -307,27 +379,87 @@ pure logical function check_assertion(op, s, sp) result(ok)
     case (OP_BOL, OP_BOS)
         ok = sp == 1
     case (OP_BOL_M)
-        ok = sp == 1 .or. byte_at(s, sp - 1) == 10
+        ok = sp == 1 .or. at(s, sp - 1) == 10
     case (OP_EOL)
-        ok = sp == n + 1 .or. (sp == n .and. byte_at(s, sp) == 10)
+        ok = sp == n + 1 .or. (sp == n .and. at(s, sp) == 10)
     case (OP_EOL_M)
-        ok = sp == n + 1 .or. byte_at(s, sp) == 10
+        ok = sp == n + 1 .or. at(s, sp) == 10
     case (OP_EOS)
         ok = sp == n + 1
     case (OP_WORDB)
-        ok = is_word_code(byte_at(s, sp - 1)) .neqv. is_word_code(byte_at(s, sp))
+        ok = is_word_code(at(s, sp - 1)) .neqv. is_word_code(at(s, sp))
     case default   ! OP_NWORDB; like Python, never matches in an empty string
-        ok = n > 0 .and. (is_word_code(byte_at(s, sp - 1)) .eqv. is_word_code(byte_at(s, sp)))
+        ok = n > 0 .and. (is_word_code(at(s, sp - 1)) .eqv. is_word_code(at(s, sp)))
     end select
 end function check_assertion
 
-pure subroutine push(vm, kind, x, y)
+pure integer function at(s, i) result(c)
+    !! Byte value (0-255) of `s(i:i)`, or -1 if `i` is outside the string. The same as
+    !! fregex_string's byte_at, but in this module so that the compiler can inline it.
+    character(len=*), intent(in) :: s
+    integer, intent(in) :: i
+    if (i < 1 .or. i > len(s)) then
+        c = -1
+    else
+        c = iand(ichar(s(i:i)), 255)
+    end if
+end function at
+
+pure logical function byte_matches(prog, pc, c) result(ok)
+    !! True if byte `c` (-1 at the end of the string) passes the test of the OP_REPEAT at `pc`.
+    type(program_t), intent(in) :: prog
+    integer, intent(in) :: pc, c
+    select case (prog%code(1, pc))
+    case (OP_CHAR)
+        ok = c == prog%code(2, pc)
+    case (OP_CHARI)
+        ok = to_lower_code(c) == prog%code(2, pc)
+    case (OP_ANY)
+        ok = c >= 0 .and. c /= 10
+    case (OP_ANYNL)
+        ok = c >= 0
+    case default   ! OP_SET
+        ok = prog%sets(c, prog%code(2, pc))
+    end select
+end function byte_matches
+
+pure integer function scan_repeat(prog, pc, s, from, upto) result(p)
+    !! The first position in `from:upto-1` whose byte fails the test of the OP_REPEAT at `pc`,
+    !! or `upto` if they all pass.
+    type(program_t), intent(in) :: prog
+    integer, intent(in) :: pc, from, upto
+    character(len=*), intent(in) :: s
+    integer :: b
+    p = from
+    b = prog%code(2, pc)
+    select case (prog%code(1, pc))
+    case (OP_SET)
+        do while (p < upto)
+            if (.not. prog%sets(at(s, p), b)) exit
+            p = p + 1
+        end do
+    case (OP_CHAR)
+        do while (p < upto)
+            if (at(s, p) /= b) exit
+            p = p + 1
+        end do
+    case (OP_ANYNL)
+        p = max(from, min(upto, len(s) + 1))
+    case default
+        do while (p < upto)
+            if (.not. byte_matches(prog, pc, at(s, p))) exit
+            p = p + 1
+        end do
+    end select
+end function scan_repeat
+
+pure subroutine push(vm, kind, x, y, z)
     type(vm_t), intent(inout) :: vm
-    integer, intent(in) :: kind, x, y
+    integer, intent(in) :: kind, x, y, z
     integer, allocatable :: tmp(:, :)
 
     if (vm%top == size(vm%stack, 2)) then
-        allocate (tmp(3, 2*vm%top))
+        allocate (tmp(4, 2*vm%top))
         tmp(:, 1:vm%top) = vm%stack(:, 1:vm%top)
         call move_alloc(tmp, vm%stack)
     end if
@@ -335,6 +467,7 @@ pure subroutine push(vm, kind, x, y)
     vm%stack(1, vm%top) = kind
     vm%stack(2, vm%top) = x
     vm%stack(3, vm%top) = y
+    vm%stack(4, vm%top) = z
 end subroutine push
 
 pure subroutine unwind(vm, t0)
@@ -361,7 +494,7 @@ pure subroutine compact(vm, t0)
     integer :: k, j
     j = t0
     do k = t0 + 1, vm%top
-        if (vm%stack(1, k) /= BT_BRANCH) then
+        if (vm%stack(1, k) == BT_CAP .or. vm%stack(1, k) == BT_REG) then
             j = j + 1
             vm%stack(:, j) = vm%stack(:, k)
         end if

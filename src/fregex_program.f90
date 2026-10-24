@@ -1,6 +1,5 @@
 module fregex_program
 !! Compiled form of a regular expression: a list of instructions for the backtracking VM.
-use fregex_charset, only: charset_t
 use fregex_string, only: regex_string_t
 implicit none
 private
@@ -33,19 +32,25 @@ integer, parameter, public :: OP_LOOKBEHIND = 22  !! 1: pc after the body, 2: ne
 integer, parameter, public :: OP_ENDAT = 23       !! 1: register; succeeds only at the stored position
 integer, parameter, public :: OP_ATOMIC = 24      !! 1: pc after the body
 integer, parameter, public :: OP_SUCCEED = 25     !! end of a lookaround or atomic body
+integer, parameter, public :: OP_REPEAT = 26      !! repeat of one byte test: 1: test op (OP_CHAR, OP_CHARI, OP_ANY,
+                                                  !! OP_ANYNL or OP_SET), 2: its operand, 3: min, 4: max or
+                                                  !! UNBOUNDED, 5: REP_GREEDY, REP_LAZY or REP_POSSESSIVE
+
+integer, parameter, public :: REP_GREEDY = 0, REP_LAZY = 1, REP_POSSESSIVE = 2
 
 integer, parameter, public :: UNBOUNDED = -1      !! lookbehind with no maximum width
 
 type, public :: program_t
     integer :: n = 0
     integer, allocatable :: code(:, :)          !! (0:NOPERANDS, capacity); code(0, pc) is the opcode
-    type(charset_t), allocatable :: sets(:)
+    logical, allocatable :: sets(:, :)          !! (-1:255, nsets): byte tables of the character classes
     integer :: ngroups = 0                      !! capturing groups, not counting group 0
     integer :: nregs = 0
     type(regex_string_t), allocatable :: names(:)     !! (1:ngroups)
     logical :: anchored = .false.               !! can only match at the start of the string
     logical :: use_first = .false.              !! a match must start with a byte in `first`
-    type(charset_t) :: first
+    logical :: first(-1:255) = .false.
+    character(len=:), allocatable :: prefix     !! literal text that every match starts with (may be empty)
 contains
     procedure :: emit
     procedure :: new_reg
